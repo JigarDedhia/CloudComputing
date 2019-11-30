@@ -1,0 +1,294 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Create CICD template",
+    "Parameters": {
+        "S3BucketApp": {
+            "Type": "String",
+            "Default": "xyz180305"
+        },
+        "S3BucketCodeDeployDomain": {
+            "Type": "String",
+            "Default": "code-deploy.abc180305"
+        },
+        "TagKey": {
+            "Type": "String",
+            "Default": "csye6225-EC2-Key"
+        },
+        "TagValue": {
+            "Type": "String",
+            "Default": "csye6225-EC2"
+        },
+        "TravisUser": {
+            "Type": "String",
+            "Default": "travis"
+        },
+        "dynamoDBTable":{
+            "Type":"String",
+            "Default":"csye6225"
+        },
+        "SesDomainName":{
+            "Type":"String",
+            "Default":"abc2127.me"
+        }
+    },
+    "Resources": {
+        "CodeDeployEC2ServiceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [ "ec2.amazonaws.com" ]
+                            },
+                            "Action": [ "sts:AssumeRole" ]
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    {
+                        "Fn::Join": ["",[ "arn:aws:iam:",":",{ "Ref": "AWS::AccountId"},":","policy","/","CodeDeployEC2S3"]]
+                    },
+                    "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                    {"Fn::Join": ["",[ "arn:aws:iam:",":",{ "Ref": "AWS::AccountId"},":","policy","/","SNSPolicy"]]}
+                ],
+                "Path": "/",
+                "RoleName": "CodeDeployEC2ServiceRole"
+            },
+            "DependsOn": ["CodeDeployEC2S3","SNSPolicy"]
+        },
+        "CodeDeployServiceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": ["codedeploy.amazonaws.com"]
+                            },
+                            "Action": ["sts:AssumeRole"]
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole",
+                    "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda"
+                ],
+                "Path": "/",
+                "RoleName": "CodeDeployServiceRole"
+            }
+        },
+        "LambdaExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Action": [
+                                "sts:AssumeRole"
+                            ],
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [ "lambda.amazonaws.com"]
+                            }
+                        }
+                    ],
+                    "Version": "2012-10-17"
+                },
+                "Path": "/",
+                "RoleName":"LambdaExecutionRole",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+                    {"Fn::Join": ["",[ "arn:aws:iam:",":",{ "Ref": "AWS::AccountId"},":","policy","/","SESPolicy"]]},
+                    {"Fn::Join": ["",[ "arn:aws:iam:",":",{ "Ref": "AWS::AccountId"},":","policy","/","DynamoDBPolicy"]]}
+                ]
+            },
+            "DependsOn":["DynamoDBPolicy","SESPolicy"]
+        },
+        "EC2ServiceRoleInstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "CodeDeployEC2ServiceRole"
+                    }
+                ],
+                "InstanceProfileName": "EC2ServiceRoleInstanceProfile"
+            },
+            "DependsOn": "CodeDeployEC2ServiceRole"
+        },
+        "CodeDeployEC2S3": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "Description": "This policy allows EC2 instances to get data from S3 buckets. This is required for EC2 instances to download latest application revision.",
+                "Path": "/",
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:Get*",
+                                "s3:List*",
+                                "s3:Put*",
+                                "s3:Delete*"
+                            ],
+                            "Resource": [
+                                {"Fn::Join":["",["arn:aws:s3:::",{"Ref":"S3BucketApp"},"/*"]]}
+                            ]
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:Get*",
+                                "s3:List*"
+                            ],
+                            "Resource":[
+                                {"Fn::Join":["",["arn:aws:s3:::",{"Ref":"S3BucketCodeDeploy"},"/*"]]}
+                            ]
+                        }
+                    ]
+                },
+                "ManagedPolicyName": "CodeDeployEC2S3"
+            }
+        },
+        "TravisUploadToS3": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "Description": "This policy allows TravisCI to upload artifiacts from latest successful build to dedicated S3 bucket used by code deploy.",
+                "Path": "/",
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:PutObject"
+                            ],
+                            "Resource": {
+                                "Fn::Join": ["",["arn:aws:s3:","::","S3BucketCodeDeploy","/*"]]
+                            }
+                        }
+                    ]
+                },
+                "Users": [ {"Ref": "TravisUser"} ]
+            },
+            "DependsOn": "S3BucketCodeDeploy"
+        },
+        "DynamoDBPolicy":{
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties":{
+                "Description": "This policy allows AWS Lambda to access DynamoDB",
+                "Path": "/",
+                "PolicyDocument":{
+                    "Version":"2012-10-17",
+                    "Statement":[
+                        {
+                            "Effect": "Allow",
+                            "Action":[
+                                "dynamodb:Get*",
+                                "dynamodb:Put*"
+                            ],
+                            "Resource":["*"]
+                        }
+                    ]
+                },
+                "ManagedPolicyName":"DynamoDBPolicy"
+            }
+        },
+        "SESPolicy":{
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties":{
+                "Description": "This policy allows AWS Lambda to access SES",
+                "Path": "/",
+                "PolicyDocument":{
+                    "Version":"2012-10-17",
+                    "Statement":[
+                        {
+                            "Effect": "Allow",
+                            "Action":[
+                                "ses:SendEmail",
+                                "ses:SendRawEmail"
+                            ],
+                            "Resource":["*"]
+                        }
+                    ]
+                },
+                "ManagedPolicyName":"SESPolicy"
+            }
+        },
+        "SNSPolicy":{
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties":{
+                "Description": "This policy allows EC2 to access SNS",
+                "Path": "/",
+                "PolicyDocument":{
+                    "Version":"2012-10-17",
+                    "Statement":[
+                        {
+                            "Effect": "Allow",
+                            "Action":[
+                                "SNS:Publish"
+                            ],
+                            "Resource":["*"]
+                        }
+                    ]
+                },
+                "ManagedPolicyName":"SNSPolicy"
+            }
+        },
+        "S3BucketCodeDeploy": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Ref": "S3BucketCodeDeployDomain"
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "S3BucketCodeDeploy": {
+            "Description": "The S3 bucket for code deploy",
+            "Value": {
+                "Ref": "S3BucketCodeDeploy"
+            },
+            "Export": {
+                "Name": "S3BucketCodeDeploy"
+            }
+        },
+        "EC2ServiceRoleInstanceProfile": {
+            "Description": "The Instance Profile for EC2 Service Role",
+            "Value": {
+                "Ref": "EC2ServiceRoleInstanceProfile"
+            },
+            "Export": {
+                "Name": "EC2ServiceRoleInstanceProfile"
+            }
+        },
+        "LambdaExecutionRoleARN":{
+            "Description":"Exporting the lambda execution role for lambda function in application json",
+            "Value":{
+                "Fn::GetAtt":[
+                    "LambdaExecutionRole",
+                    "Arn"
+                ]
+            },
+            "Export":{"Name":"LambdaExecutionRoleARN"}
+        },
+        "CodeDeployServiceRoleArn":{
+            "Description":"Get the service role arn",
+            "Value":{
+                "Fn::GetAtt": [
+                    "CodeDeployServiceRole",
+                    "Arn"
+                ]
+            },
+            "Export":{"Name":"CodeDeployServiceRoleArn"}
+        }
+    }
+}
